@@ -1,0 +1,211 @@
+---
+title: "Practical Machine Learning (Final Project)"
+author: "Nuno Melo"
+date: "July 2, 2016"
+output: 
+  html_document: 
+    number_sections: yes
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE)
+```
+
+# Executive Summary
+
+In this project, our goal is to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants and predict if the activity was done correctly or incorrectly in 20 different test cases. Participants were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here:   <http://groupware.les.inf.puc-rio.br/har>.
+
+```{r loading required packages, echo = FALSE}
+library(caret)
+library(randomForest)
+library(data.table)
+library(dplyr)
+library(rattle)
+```
+
+# Loading and preparing data for analysys
+## Loading data   
+We first load the raw data directly from the web sites. Training and testing datasets are included
+in the variable *trainingTesting*. This variable will be partioned later on. *Validation* dataset is loaded and put aside.
+
+```{r reading data}
+# Reading data
+
+trainingTesting <- fread("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", 
+                         na.strings=c(NA, "", "#DIV/0!"), stringsAsFactors = TRUE, verbose = FALSE)
+validation <- fread("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv",
+                 na.strings=c(NA, "", "#DIV/0!"), stringsAsFactors = TRUE)
+```
+
+## Cleaning data
+We now clean the data and prepare for manipulation. We have created a function, which
+removes all unecessary variables. They include:   
+
+ 1. The first 7 variables since they are not related to the actvities   
+ 2. All variables with more than 75% missing values (NAs)   
+
+
+
+```{r cleaning data}
+# Function cleaning and preparing data for analysis
+createTechnicallyCorrectData <- function(df) {
+    
+    ## Removing first 7 columns, since they no influence predicting "classe"
+    df <- df %>% dplyr::select(-(V1:num_window))
+    
+    ## Removing variables with more that 75% NAs
+    NAColsAmount <- colSums(is.na(df))
+    varAcceptableNA <- names(NAColsAmount[(NAColsAmount / nrow(df)) < 0.75])
+    df <- df[, names(df) %in% varAcceptableNA]
+    
+    filter <- "kurtosis|skewness|max_yaw|min_yaw|amplitude_yaw"
+    df <- df %>% dplyr::select(-matches(filter))
+    
+    df
+}
+
+## Calling function *createTechnicallyCorrectData* to clean and prepare data for prediction
+dfTrainingTesting <- tbl_df(trainingTesting) %>% createTechnicallyCorrectData()
+dfValidation <- tbl_df(validation) %>% createTechnicallyCorrectData()
+
+```
+
+We now have cleaned  *trainingTesting* and *validation* data sets, both with **`r dim(dfTrainingTesting)[2]`** variables.
+
+# Data Partioning
+Having clean and ready datasets we partion *trainingTesting* dataset in *dfTraining* and *dfTesting* datasets. Since this
+a random process, we set the seed to allow reproducibility.
+
+```{r data partioning}
+# Partioning data
+set.seed(1234)
+InTrain <- createDataPartition(y = dfTrainingTesting$classe, p=0.75,list=FALSE)
+
+dfTraining <- dfTrainingTesting[InTrain,]
+dfTesting <- dfTrainingTesting[-InTrain,]
+dim(dfTraining);dim(dfTesting)
+
+```
+
+# Building the models
+In this project will we use three machine algorithms:   
+
+1. Decision Trees (*rpart*)
+2. Random Forest decision trees with cross validation, to improve overfitting (*rf*)
+3. Stochastic gradient boosting trees (*gbm*)
+
+Secondly we will estimate accuracy, out of sample erros for the built models.
+
+## Model training creation
+Before initiating the training procedure, we set a seed allowing reproducibility. At the end of each model
+training, we calculate the error in and out of sample errors.
+
+### Decision Trees   
+
+```{r rpart model training}
+set.seed(4321)
+rpartModel <- train(classe ~ ., data=dfTraining, method="rpart")
+```
+### Random Forest
+
+#### Cross validation used in Random Forest   
+Random forest is a very accurate prediction model. However to reduce overfitting, we have used
+**cross validation**. To this purpose we create a control function and tune some prameters. 
+The model gets tested on 5 different parts of the data, repeated 3 times over. Then 
+we chose the ‘oneSE’ function to select a model that is not the most complex. 
+
+```{r rf model training}
+ctrl = trainControl(method="repeatedcv", number=5, repeats=3, selectionFunction = "oneSE")
+set.seed(4321)
+rfModel <- train(classe ~ ., data=dfTraining, method="rf", trControl= ctrl)
+```
+
+
+### Stochastic gradient boosting trees
+``` {r gbm model training}
+set.seed(4321)
+gbmModel <- train(classe ~ ., data=dfTraining, method="gbm")
+```
+
+# In and Out of Sample Erros (Model accuracy)   
+We now perform models accuracy by first predicting *classe* values in the training 
+and testing datasets, i.e. *dfTraining* and *dfTesting* respectively. Next we run *postResample*
+to calculate models accuracy and In and Out of Sample Errors.   
+
+1. Decision Trees (*rpart*)
+2. Random Forest decision trees with cross validation, to improve overfitting (*rf*)
+3. Stochastic gradient boosting trees (*gbm*)
+
+## Decision Trees
+``` {r rpart prediction accuracy}
+rpartPredInSample <- predict(rpartModel, dfTraining)
+rpartPredOutSample <- predict(rpartModel, dfTesting)
+
+rpartErrorIn <- postResample(rpartPredInSample, dfTraining$classe)
+rpartErrorOut <- postResample(rpartPredOutSample, dfTesting$classe)
+```
+
+* In sample, i.e in the training dataset, accuracy is: **`r rpartErrorIn[1]`**  
+* Out of sample, i.e. in the testing dataset, accuracy is **`r rpartErrorOut[1]`**
+
+
+## Random Forest decision trees with cross validation  
+``` {r rf prediction accuracy}
+rfPredInSample <- predict(rfModel, dfTraining)
+rfPredOutSample <- predict(rfModel, dfTesting)
+
+rftErrorIn <- postResample(rfPredInSample, dfTraining$classe)
+rfErrorOut <- postResample(rfPredOutSample, dfTesting$classe)
+```
+
+* In sample, i.e in the training dataset, accuracy is: **`r rftErrorIn[1]`**  
+* Out of sample, i.e. in the testing dataset, accuracy is **`r rfErrorOut[1]`**
+
+## Stochastic gradient boosting trees
+``` {r gbm prediction accuracy}
+gbmPredInSample <- predict(gbmModel, dfTraining)
+gbmPredOutSample <- predict(gbmModel, dfTesting)
+
+gbmtErrorIn <- postResample(gbmPredInSample, dfTraining$classe)
+gbmErrorOut <- postResample(gbmPredOutSample, dfTesting$classe)
+```
+
+* In sample, i.e in the training dataset, accuracy is: **`r gbmtErrorIn[1]`**  
+* Out of sample, i.e. in the testing dataset, accuracy is **`r gbmErrorOut[1]`**
+
+# Selected model
+
+``` {r best model graphs}
+rfModel
+confusionMatrix(data=rfModel, reference=dfTesting$classe)
+varImp(rfModel)
+plot(rfModel)
+```
+
+# Conclusion and Model selection
+
+Most important conclusions from the above
+
+1. As expected, prediction accuracy is higher in the training than testing datasets
+2. The accuracy from *gbm* and *rf* models is much higher than *rpart*
+3. The model delivering better prediction accuracy is *rf* Random Forest with 
+cross validation
+4. In *rf* small improvment in accuracy is seen from using two predictors to 27 (the true best model)
+5. The most important and in fact used, predictors used are *roll_belt* and *yaw_belt*
+
+# Predicting in the *validation* dataset
+We now predict, with our best model, the results using the *dfValidation* dataset, 
+and print it for peer evaluation.
+
+``` {r  final prediction}
+finalPrediction <- predict(rfModel, dfValidation)
+```
+
+``` {r saving results to file}
+PredictionResults <- data.frame(
+  problem_id=validation$problem_id,
+  prediction=finalPrediction
+)
+print(PredictionResults)
+```
